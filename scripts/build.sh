@@ -1,39 +1,35 @@
 #!/bin/sh
-# Builds app/app.syn into a Vela guest module: build/app.wasm (+ .sha256).
+# Builds app/app.syn into a Vela guest module: build/app.wasm (+ .sha256). No compiler involved.
 #
-# The module is Synsema's interpreter plus your program, exposed through Vela's ABI by the adapter
-# in kitecosmic/synsema (packages/guests/vela). This script clones that repo at a release tag into
-# .synsema/ and builds the adapter with your app embedded. Needs git, rustup (stable) and the
-# wasm32-wasip1 target (added here). First build ≈ 5 min (the interpreter), later ones ≈ 2 min.
-# No Rust? Push to GitHub: .github/workflows/build.yml builds it and attaches build/app.wasm.
+# The module is Synsema's interpreter plus your program. Every Synsema release publishes the
+# interpreter as a Vela guest (`synsema-vela-guest.wasm`, an asset of the release) with an app slot
+# inside; scripts/embed.syn puts your program into that slot. The SHA-256 Vela verifies on-chain
+# covers interpreter and program together. Needs the `synsema` binary and curl.
 #
-#   sh scripts/build.sh                 # app/app.syn
+#   sh scripts/build.sh                          # app/app.syn with the guest of SYNSEMA_TAG (downloaded once into .synsema/)
 #   APP=path/to/other.syn sh scripts/build.sh
-#   SYNSEMA_TAG=v0.6.22 sh scripts/build.sh   # pin the engine (default below)
+#   SYNSEMA_TAG=v0.6.23 sh scripts/build.sh      # pin the guest's release (default below)
+#   GUEST_WASM=/path/to/synsema-vela-guest.wasm sh scripts/build.sh   # a guest you built or downloaded yourself
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SYNSEMA_TAG="${SYNSEMA_TAG:-v0.6.22}"
+SYNSEMA_TAG="${SYNSEMA_TAG:-v0.6.23}"
 APP="${APP:-$ROOT/app/app.syn}"
-ENGINE_DIR="$ROOT/.synsema"
+GUEST_WASM="${GUEST_WASM:-$ROOT/.synsema/synsema-vela-guest-$SYNSEMA_TAG.wasm}"
 
-if [ ! -d "$ENGINE_DIR" ]; then
-  echo "cloning kitecosmic/synsema $SYNSEMA_TAG into .synsema/ …"
-  git clone --depth 1 --branch "$SYNSEMA_TAG" https://github.com/kitecosmic/synsema.git "$ENGINE_DIR"
+if [ ! -f "$GUEST_WASM" ]; then
+  BASE="https://github.com/kitecosmic/synsema/releases/download/$SYNSEMA_TAG"
+  echo "downloading the Vela guest of Synsema $SYNSEMA_TAG …"
+  mkdir -p "$(dirname "$GUEST_WASM")"
+  curl -fsSL -o "$GUEST_WASM.part" "$BASE/synsema-vela-guest.wasm"
+  curl -fsSL -o "$GUEST_WASM.sha256" "$BASE/synsema-vela-guest.wasm.sha256"
+  WANT="$(cut -d' ' -f1 "$GUEST_WASM.sha256")"
+  GOT="$(sha256sum "$GUEST_WASM.part" | cut -d' ' -f1)"
+  [ "$WANT" = "$GOT" ] || { echo "sha256 mismatch for the guest: wanted $WANT, got $GOT"; rm -f "$GUEST_WASM.part"; exit 1; }
+  mv "$GUEST_WASM.part" "$GUEST_WASM"
 fi
-rustup target add wasm32-wasip1 >/dev/null 2>&1 || true
-
-# build.rs reads the program from SYNSEMA_VELA_APP; on Git Bash (Windows) rustc wants a Windows path.
-APP_PATH="$APP"
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) APP_PATH="$(cygpath -w "$APP")" ;;
-esac
-
-echo "building the guest with $APP …"
-# SYNSEMA_VERSION is what the module reports as its engine version (the release sets it to the tag).
-( cd "$ENGINE_DIR/packages/guests/vela" && SYNSEMA_VELA_APP="$APP_PATH" SYNSEMA_VERSION="$SYNSEMA_TAG" cargo build --profile wasm )
 
 mkdir -p "$ROOT/build"
-cp "$ENGINE_DIR/engine/target/wasm32-wasip1/wasm/synsema_vela_guest.wasm" "$ROOT/build/app.wasm"
-( cd "$ROOT/build" && sha256sum app.wasm > app.wasm.sha256 )
-echo "build/app.wasm: $(wc -c < "$ROOT/build/app.wasm") bytes, sha256 $(cut -d' ' -f1 "$ROOT/build/app.wasm.sha256")"
-echo "next: node scripts/smoke.mjs build/app.wasm   (Node 20 or 24+, not 22)"
+cd "$ROOT"
+synsema run scripts/embed.syn -- "$GUEST_WASM" "$APP" build/app.wasm
+( cd build && sha256sum app.wasm > app.wasm.sha256 )
+echo "next: node scripts/smoke.mjs build/app.wasm   (optional; Node 20 or 24+, not 22)"

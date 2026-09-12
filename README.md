@@ -17,7 +17,8 @@ the adapter and its README live in [kitecosmic/synsema — packages/guests/vela]
 app/app.syn                  your app: deploy · load_module · deposit · process · deanonymize · trusted, with tests
 client/vela_client.syn       the client: keys, register, deploy, deposit ETH/ERC-20, encrypted send, reports, events, facilitator
 client/.env.example          addresses, URLs and keys the client reads
-scripts/build.sh             app/app.syn → build/app.wasm (the guest module Vela loads) + sha256
+scripts/build.sh             app/app.syn → build/app.wasm (the release's guest module with your program in its slot) + sha256
+scripts/embed.syn            puts a .syn into the app slot of a guest module — what build.sh runs; no compiler
 scripts/smoke.mjs            generic probe of a module under Node's WASI, the way the Executor drives it
 scripts/devnet.sh            Horizen's starter kit in Docker (nine containers), and client/.env written for it
 scripts/e2e.sh               keys → deploy → register → deposit → send → events, end to end
@@ -27,13 +28,14 @@ syn.toml                     the recipe descriptor for the Synsema platform (pha
 
 ## Ten minutes
 
-You need the [`synsema` binary](https://synsema.org) (`npm i -g synsema`, or the install script) and,
-to build the module, Rust (`rustup`) — or push to GitHub and download `app.wasm` from the CI run.
-To run the stack locally you need Docker; without Docker, point `client/.env` at a hosted devnet.
+You need the [`synsema` binary](https://synsema.org) (`npm i -g synsema`, or the install script). That is
+all: the module is the release's guest with your program in its slot — no compiler, a few seconds.
+To run the stack locally you need Docker; without Docker, `synsema run vela_client.syn -- devnet` writes a
+token of your own on the public devnet into `client/.env`.
 
 ```sh
 synsema test app/app.syn                 # 1. the app, natively — the same code runs in the enclave
-sh scripts/build.sh                      # 2. build/app.wasm (first time ≈ 5 min: it compiles the interpreter)
+sh scripts/build.sh                      # 2. build/app.wasm: the release's guest + your program (the guest downloads once)
 node scripts/smoke.mjs build/app.wasm    #    Node 20 or 24+ (not 22): imports, exports, load_module, deploy, determinism
 sh scripts/devnet.sh                     # 3. Vela in Docker; writes client/.env with the deployed addresses
 sh scripts/e2e.sh                        # 4. keys, deploy, register, deposit, an encrypted request, your events decrypted
@@ -86,7 +88,8 @@ The rules that matter, all enforced by the adapter or by Vela itself:
 | `user` · `register-for` · `send-for '<json>' [amount token]` · `events-for [n]` | the facilitator flow: a user with no ETH signs EIP-712 typed data (and an EIP-2612 permit for a token deposit); `VELA_SECP_KEY` pays |
 
 Configuration is `client/.env` (copy `.env.example`). `scripts/devnet.sh` fills in the local
-addresses; for a hosted devnet set the three URLs and the two contract addresses its operator gives you.
+addresses; `synsema run vela_client.syn -- devnet` writes the public devnet's lines with a token of your own
+(`allow-token` and `allow-authority` then run with the admin key, Anvil #0 there).
 
 ## Trigger contracts, ERC-20, facilitator
 
@@ -102,8 +105,7 @@ the trigger cycle step by step.
 - Deploying needs an account with `DEPLOYER_ROLE` (Anvil #0 on the local kit); deanonymization
   needs the caller allowed in `DefaultAuthority`; ERC-20s need the `TokenAllowlist`.
 - `to` and `from` are reserved words in Synsema; there are no `0xab` literals (write `171`).
-- On Windows, run the scripts from Git Bash. Building takes about 3 GB of disk for the engine's
-  target directory.
+- On Windows, run the scripts from Git Bash.
 
 ## Guía rápida (español)
 

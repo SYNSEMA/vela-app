@@ -1,15 +1,15 @@
-# Builds the Vela guest from app/app.syn, probes it the way the Executor drives it (Node 24 WASI
-# and wasmtime-go v1.0.0), tests the app and the client natively, and publishes build/app.wasm
-# as a downloadable artifact — so a team without Rust still gets a module to deploy.
+# Tests the app and the client natively, builds the Vela guest from app/app.syn (the
+# release's guest module + your program, no compiler), probes it the way the Executor drives it
+# (Node 24 WASI and wasmtime-go v1.0.0), and publishes build/app.wasm as a downloadable artifact.
 name: vela guest
 
 on: [push, pull_request, workflow_dispatch]
 
 env:
-  SYNSEMA_TAG: v0.6.22
+  SYNSEMA_TAG: v0.6.23
   # The Go probe sends a process_request; set repository variables if your app's instructions differ.
-  DEPLOY_PARAMS: ${{ vars.VELA_DEPLOY_PARAMS }}
-  PAYLOAD: ${{ vars.VELA_SMOKE_PAYLOAD }}
+  DEPLOY_PARAMS: ${{ vars.VELA_DEPLOY_PARAMS || '' }}
+  PAYLOAD: ${{ vars.VELA_SMOKE_PAYLOAD || '{"type":"transfer","to":"0x2222222222222222222222222222222222222222","amount":"1"}' }}
 
 jobs:
   guest:
@@ -24,29 +24,19 @@ jobs:
       - name: Test the app and the client natively
         run: |
           synsema test app/app.syn
-          synsema test client/vela_client.syn
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-wasip1
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.22"
-      - name: Cache the engine build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            .synsema/engine/target
-          key: ${{ runner.os }}-vela-guest-${{ env.SYNSEMA_TAG }}-${{ hashFiles('app/app.syn') }}
-          restore-keys: ${{ runner.os }}-vela-guest-${{ env.SYNSEMA_TAG }}-
-      - name: Build the guest (Synsema adapter + app/app.syn)
+          (cd client && synsema test vela_client.syn)
+          synsema test scripts/embed.syn
+      - name: Build the guest (the release's module + app/app.syn)
         run: sh scripts/build.sh
       - name: Smoke under Node WASI (imports, exports, load_module, deploy, determinism)
         run: node scripts/smoke.mjs build/app.wasm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
       - name: Probe under wasmtime-go v1.0.0 (the Executor's runtime)
-        working-directory: .synsema/packages/guests/vela/tests/wasmtime-go
-        run: go run . "$GITHUB_WORKSPACE/build/app.wasm"
+        run: |
+          git clone -q --depth 1 --branch "$SYNSEMA_TAG" https://github.com/kitecosmic/synsema.git .synsema/src
+          cd .synsema/src/packages/guests/vela/tests/wasmtime-go && go run . "$GITHUB_WORKSPACE/build/app.wasm"
       - uses: actions/upload-artifact@v4
         with:
           name: app.wasm
