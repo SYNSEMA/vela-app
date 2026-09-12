@@ -4,5 +4,6 @@
 .vela-devnet/
 # built modules
 build/
-# keys and addresses
-client/.env
+# keys, addresses and tokens: every client/.env* except the example
+client/.env*
+!client/.env.example
