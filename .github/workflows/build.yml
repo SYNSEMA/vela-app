@@ -1,0 +1,55 @@
+# Builds the Vela guest from app/app.syn, probes it the way the Executor drives it (Node 24 WASI
+# and wasmtime-go v1.0.0), tests the app and the client natively, and publishes build/app.wasm
+# as a downloadable artifact — so a team without Rust still gets a module to deploy.
+name: vela guest
+
+on: [push, pull_request, workflow_dispatch]
+
+env:
+  SYNSEMA_TAG: v0.6.22
+  # The Go probe sends a process_request; set repository variables if your app's instructions differ.
+  DEPLOY_PARAMS: ${{ vars.VELA_DEPLOY_PARAMS }}
+  PAYLOAD: ${{ vars.VELA_SMOKE_PAYLOAD }}
+
+jobs:
+  guest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install the released Synsema binary
+        run: npm i -g synsema@${SYNSEMA_TAG#v} && synsema version
+      - name: Test the app and the client natively
+        run: |
+          synsema test app/app.syn
+          synsema test client/vela_client.syn
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Cache the engine build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .synsema/engine/target
+          key: ${{ runner.os }}-vela-guest-${{ env.SYNSEMA_TAG }}-${{ hashFiles('app/app.syn') }}
+          restore-keys: ${{ runner.os }}-vela-guest-${{ env.SYNSEMA_TAG }}-
+      - name: Build the guest (Synsema adapter + app/app.syn)
+        run: sh scripts/build.sh
+      - name: Smoke under Node WASI (imports, exports, load_module, deploy, determinism)
+        run: node scripts/smoke.mjs build/app.wasm
+      - name: Probe under wasmtime-go v1.0.0 (the Executor's runtime)
+        working-directory: .synsema/packages/guests/vela/tests/wasmtime-go
+        run: go run . "$GITHUB_WORKSPACE/build/app.wasm"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app.wasm
+          path: |
+            build/app.wasm
+            build/app.wasm.sha256

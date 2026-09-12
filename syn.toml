@@ -1,0 +1,25 @@
+# A Vela (Horizen) app in Synsema as a recipe: the guest in app/app.syn (built to build/app.wasm
+# and deployed to Vela), the client in client/ (the side outside the enclave). This file only says
+# what the code cannot say about itself; the `require` blocks are the manifests of capabilities.
+# Phase 1 runs locally with the `synsema` binary. Phase 2 (a `worker` that watches the app from
+# the Synsema platform) will make `entry` deployable with `syn deploy`.
+
+name = "Vela app"
+slug = "vela-app"
+version = "0.1.0"
+kind = "worker"
+entry = "client/vela_client.syn"
+engine = "0.6"
+tagline = "A confidential app for Horizen's Vela, in Synsema: the guest, its tests, and the client for the other side of the enclave."
+tagline_es = "Una app confidencial para Vela (Horizen) en Synsema: el guest, sus tests y el cliente para el otro lado del enclave."
+tagline_pt = "Um app confidencial para o Vela (Horizen) em Synsema: o guest, seus testes e o cliente para o outro lado do enclave."
+
+[secrets]
+VELA_SECP_KEY = "secp256k1 key that signs the transactions and pays the fees (hex; Anvil #0 on the local devnet)"
+VELA_P521_KEY = "P-521 private key for the encrypted channel with the Executor (hex; `vela_client.syn -- keys` makes one)"
+
+[env]
+VELA_RPC_URL = "http://localhost:8545"
+VELA_AUTHORITY_URL = "http://localhost:8081"
+VELA_SUBGRAPH_URL = "http://localhost:8000/subgraphs/name/hcce"
+VELA_MAX_FEE = "100"
