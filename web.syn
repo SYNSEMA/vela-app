@@ -82,6 +82,35 @@ task field(m, key, default)
         give m[key]
     give default
 
+-- ---- for people: grouped digits, no trailing zeros, short hex, the stack's host ----
+
+task group(intp)
+    let out be ""
+    let i be length(intp)
+    while i > 3
+        set out to "," + slice(intp, i - 3, i) + out
+        set i to i - 3
+    give slice(intp, 0, i) + out
+
+task nice(t)
+    let parts be split(text(t), ".")
+    let dec be when length(parts) > 1 then parts[1] otherwise ""
+    when length(dec) > 6
+        set dec to slice(dec, 0, 6)
+    while length(dec) > 0 and slice(dec, length(dec) - 1, length(dec)) == "0"
+        set dec to slice(dec, 0, length(dec) - 1)
+    give group(parts[0]) + (when dec == "" then "" otherwise "." + dec)
+
+task short(h)
+    let a be text(h)
+    when length(a) < 12
+        give a
+    give slice(a, 0, 6) + "…" + slice(a, length(a) - 4, length(a))
+
+task host_of(url)
+    let u be replace_text(replace_text(text(url), "https://", ""), "http://", "")
+    give split(u, "/")[0]
+
 task encrypted(c, keys, plain)
     give v.seal(v.derive_key(keys["key"], v.tee_public_key(c)), bytes(json_encode(plain)))
 
@@ -210,12 +239,14 @@ task do_user(s, name)
 
 task overview(s, ok, err)
     let c be config(s)
-    let d be {"ok": ok, "err": err, "host": v.need(c, "rpc", "VELA_RPC_URL"), "me": "", "eth": "", "tee": "", "app_id": s["app_id"], "deployed": s["app_id"] != "", "registered": s["registered"],
+    let d be {"ok": ok, "err": err, "host": host_of(v.need(c, "rpc", "VELA_RPC_URL")), "me": "", "me_short": "", "eth": "", "tee": "", "tee_short": "", "app_id": s["app_id"], "deployed": s["app_id"] != "", "registered": s["registered"],
               "events": [], "chain": [], "users": [], "report": "", "report_request": "", "note": ""}
     try
         set d["me"] to v.me()
-        set d["eth"] to v.from_units(text(eth_balance(c["rpc"], d["me"])), 18)
+        set d["me_short"] to short(d["me"])
+        set d["eth"] to nice(v.from_units(text(eth_balance(c["rpc"], d["me"])), 18))
         set d["tee"] to v.hex_of(v.tee_public_key(c))
+        set d["tee_short"] to short(d["tee"])
     recover e
         set d["note"] to "the stack does not answer: " + text(e)
     when d["deployed"]
@@ -228,7 +259,7 @@ task overview(s, ok, err)
             set d["note"] to "could not read the public events: " + text(e)
         let i be 0
         each u in s["users"]
-            set d["users"] to append(d["users"], {"i": i, "name": u["name"], "address": u["address"]})
+            set d["users"] to append(d["users"], {"i": i, "name": u["name"], "address": u["address"], "short": short(u["address"])})
             set i to i + 1
         when file_exists(REPORT)
             let r be json_decode(read_file(REPORT))
@@ -238,7 +269,7 @@ task overview(s, ok, err)
 
 task user_page(s, u, i, ok, err)
     let c be config(s)
-    let d be {"ok": ok, "err": err, "name": u["name"], "address": u["address"], "i": i, "events": rows_of(c, p521_pair(s), user_key(u), 20)}
+    let d be {"ok": ok, "err": err, "name": u["name"], "address": u["address"], "address_short": short(u["address"]), "i": i, "events": rows_of(c, p521_pair(s), user_key(u), 20)}
     give render("pages/user.html", d)
 
 serve on 8080
