@@ -113,7 +113,8 @@ The rules that matter, all enforced by the adapter or by Vela itself:
 
 Configuration is `client/.env` (copy `.env.example`). `scripts/devnet.sh` fills in the local
 addresses; `synsema run vela_client.syn -- devnet` writes the public devnet's lines with a token of your own
-(`allow-token` and `allow-authority` then run with the admin key, Anvil #0 there).
+(the token brings an account of your own — a deployer with ETH and test tokens — and the admin key,
+Anvil #0 there, as `VELA_ADMIN_KEY` for `allow-token` and `allow-authority`).
 
 ## Trigger contracts, ERC-20, facilitator
 

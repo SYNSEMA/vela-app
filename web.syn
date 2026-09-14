@@ -25,6 +25,7 @@ require env("SYNSEMA_*")
 require secret("VELA_*")
 require sign("VELA_SECP_KEY")
 require sign("VELA_USER_KEY")
+require sign("VELA_ADMIN_KEY")
 require random
 require time
 require file("data")

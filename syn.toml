@@ -7,7 +7,7 @@
 
 name = "Vela app"
 slug = "vela-app"
-version = "0.2.1"
+version = "0.2.2"
 kind = "web"
 entry = "web.syn"
 engine = "0.6"
@@ -16,7 +16,8 @@ tagline_es = "Una app confidencial para Vela (Horizen) en Synsema: el guest, sus
 tagline_pt = "Um app confidencial para o Vela (Horizen) em Synsema: o guest, seus testes e uma bancada para o outro lado do enclave."
 
 [secrets]
-VELA_SECP_KEY = "the secp256k1 key that signs the transactions and pays the fees (hex). On the public devnet the provision hands out Anvil #0, the deployer and the admin."
+VELA_SECP_KEY = "the secp256k1 key that signs the transactions and pays the fees (hex). On the public devnet the token comes with an account of its own: a deployer with ETH and test tokens."
+VELA_ADMIN_KEY = "the admin key for allow-token and allow-authority when it is not the signing key: the public devnet hands out Anvil #0 (public there). Empty on a local kit, where the signing key is the admin."
 VELA_P521_KEY = "P-521 private key for the encrypted channel with the Executor (hex). Provisioned on the devnet; made by the app itself when empty."
 
 # The public Vela devnet by default: the provision URL hands out a token of your own and fills these
