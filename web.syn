@@ -1,0 +1,300 @@
+-- web.syn — the workbench: your Vela app from the browser. Deploy app/app.syn (embedded into the
+-- release's guest module), register, deposit, send any payload encrypted to the Executor, read
+-- your events decrypted and the app's public events, ask for a report. Users the workbench makes
+-- (a key each, registered through the facilitator: they need no ETH) let you exercise a payload
+-- that names another account — a transfer in the template's ledger — and read what they receive.
+-- This is the recipe's entry on the Synsema platform (kind = web); the CLI in client/ does the
+-- same from a terminal, on the same library.
+--
+-- What it keeps (data/, on the project's volume): app.json (the app id, the P-521 pair it made
+-- when none came from the environment, the users), report.json (the last report).
+-- Every action is one request to the enclave: 30 to 60 seconds on a devnet.
+--
+--   synsema serve web.syn            (from the repository root; .env there = `vela_client.syn -- devnet`)
+intent: "vela workbench: deploy your app, register, deposit, send encrypted payloads, read events and reports — from the browser"
+
+require serve(8080)
+require net("localhost")
+require net("127.0.0.1")
+require net("devnet.synsema.app")
+require net("github.com")
+require net("objects.githubusercontent.com")
+require net("release-assets.githubusercontent.com")
+require env("VELA_*")
+require env("SYNSEMA_*")
+require secret("VELA_*")
+require sign("VELA_SECP_KEY")
+require sign("VELA_USER_KEY")
+require random
+require time
+require file("data")
+require file("data/*")
+require file.read("app/*")
+require file.read("pages/*")
+require reveal("ecdh_keypair.private")
+
+use "./client/vela_lib.syn" as v
+use "./scripts/embed_lib.syn" as slot
+
+let ETH be "0x0000000000000000000000000000000000000000"
+let PROCESS be 1
+let DEANONYMIZATION be 2
+let ASSOCIATE_KEY be 3
+let GUEST_TAG be env("SYNSEMA_GUEST_TAG", "v0.6.23")
+let STATE be "data/app.json"
+let REPORT be "data/report.json"
+
+-- ---- state on the volume ----
+
+task load()
+    when file_exists(STATE)
+        give json_decode(read_file(STATE))
+    give {"app_id": "", "registered": false, "p521_key": "", "p521_pub": "", "users": []}
+
+task save(s)
+    write_file(STATE, json_encode(s))
+
+task config(s)
+    let c be v.cfg()
+    when c["app_id"] == "" and s["app_id"] != ""
+        set c["app_id"] to s["app_id"]
+    give c
+
+-- ---- keys ----
+
+task p521_pair(s)
+    when env("VELA_P521_KEY", "") != ""
+        give {"key": v.p521_key(), "pub": v.p521_public()}
+    when s["p521_key"] == ""
+        let kp be ecdh_keypair("P-521")
+        set s["p521_key"] to decode(reveal(kp["private"]), "hex")
+        set s["p521_pub"] to decode(kp["public"], "hex")
+        save(s)
+    give {"key": v.p521_of(s["p521_key"]), "pub": v.hex_bytes(s["p521_pub"])}
+
+task user_key(u)
+    give v.secp_of(u["key"], "VELA_USER_KEY")
+
+-- ---- helpers ----
+
+task field(m, key, default)
+    when m != nothing and contains(m, key) and m[key] != nothing and text(m[key]) != ""
+        give m[key]
+    give default
+
+task encrypted(c, keys, plain)
+    give v.seal(v.derive_key(keys["key"], v.tee_public_key(c)), bytes(json_encode(plain)))
+
+task qs(msg)
+    let m be replace_text(text(msg), "%", "%25")
+    set m to replace_text(m, "&", "%26")
+    set m to replace_text(m, "#", "%23")
+    set m to replace_text(m, "+", "%2B")
+    set m to replace_text(m, "?", "%3F")
+    give replace_text(trim(m), " ", "+")
+
+task back(path, ok, err)
+    when err != ""
+        give redirect(path + "?err=" + qs(err), 302)
+    give redirect(path + "?ok=" + qs(ok), 302)
+
+task find_user(s, i)
+    let n be v.int_of(i)
+    when n < length(s["users"])
+        give s["users"][n]
+    give nothing
+
+task decimals_of(c, token)
+    when token == ETH
+        give 18
+    give abi_decode("uint8", eth_call(c["rpc"], {"to": token, "data": abi_encode("decimals()", [])}))[0]
+
+task payload_of(txt)
+    let plain be json_decode(txt)
+    when plain == nothing
+        raise("the payload must be a JSON object")
+    give plain
+
+-- the events of an account, one row each: the block and the event as JSON
+task rows_of(c, keys, secp, limit)
+    let out be []
+    try
+        each item in v.events_with(c, keys["key"], secp, limit)
+            when contains(item, "event")
+                set out to append(out, {"block": item["block"], "json": json_encode(item["event"])})
+    recover e
+        set out to append(out, {"block": "", "json": "could not read the events: " + text(e)})
+    give out
+
+-- ---- the actions, each one request to the enclave ----
+
+task do_deploy(s, params_text, trigger)
+    let c be config(s)
+    let params be when trim(params_text) == "" then nothing otherwise payload_of(params_text)
+    let guest be nothing
+    when file_exists("data/guest.wasm")
+        set guest to read_file_bytes("data/guest.wasm")
+    otherwise
+        set guest to slot.release_guest(GUEST_TAG)
+        write_file("data/guest.wasm", guest)
+    let wasm be slot.embed(guest, read_file("app/app.syn"), "app.syn")
+    let ids be v.deploy_bytes(c, wasm, params, when trim(trigger) == "" then nothing otherwise lower(trim(trigger)))
+    v.wait_completed(c, ids["request_id"], true)
+    set s["app_id"] to text(ids["app_id"])
+    set s["registered"] to false
+    save(s)
+    give "deployed as app " + s["app_id"] + " (a new ledger: register again)"
+
+task do_register(s)
+    let c be config(s)
+    let keys be p521_pair(s)
+    let id be v.submit(c, ASSOCIATE_KEY, v.register_payload_with(c, keys["key"], keys["pub"], v.secp_key()), ETH, 0)
+    v.wait_completed(c, id, false)
+    set s["registered"] to true
+    save(s)
+    give "registered " + v.me() + " with the enclave: a P-521 key and a privacy seed"
+
+task do_deposit(s, amount, token_text)
+    let c be config(s)
+    let token be when trim(token_text) == "" then ETH otherwise lower(trim(token_text))
+    let u be v.int_of(v.to_units(amount, decimals_of(c, token)))
+    when token != ETH
+        v.approve(c, token, u)
+    let id be v.submit(c, PROCESS, bytes(""), token, u)
+    v.wait_completed(c, id, false)
+    give "deposited " + amount + (when token == ETH then " ETH" otherwise " of " + token)
+
+task do_send(s, payload_text, eth)
+    let c be config(s)
+    let plain be payload_of(payload_text)
+    let wei be when trim(eth) == "" then 0 otherwise v.int_of(v.to_units(eth, 18))
+    let id be v.submit(c, PROCESS, encrypted(c, p521_pair(s), plain), ETH, wei)
+    let row be v.wait_completed(c, id, false)
+    give "request " + id + " completed at block " + text(row["blockNumber"]) + ", fees " + text(row["applicationFees"]) + " wei"
+
+task do_send_as(s, u, payload_text)
+    let c be config(s)
+    let plain be payload_of(payload_text)
+    let id be v.submit_for_with(c, user_key(u), PROCESS, encrypted(c, p521_pair(s), plain), ETH, 0)
+    let row be v.wait_completed(c, id, false)
+    give "request " + id + " for " + u["name"] + " completed at block " + text(row["blockNumber"]) + " (the facilitator paid)"
+
+task do_report(s, payload_text)
+    let c be config(s)
+    let plain be when trim(payload_text) == "" then {} otherwise payload_of(payload_text)
+    let id be v.submit(c, DEANONYMIZATION, encrypted(c, p521_pair(s), plain), ETH, 0)
+    v.wait_completed(c, id, false)
+    let report be v.download_report(c, id)
+    write_file(REPORT, json_encode({"request": id, "report": report}))
+    give "report " + id + " generated and decrypted"
+
+task do_allow_authority(s)
+    let c be config(s)
+    v.allow_authority(c, v.int_of(v.need(c, "app_id", "VELA_APP_ID")), lower(v.me()))
+    give v.me() + " may ask this app for reports (DefaultAuthority; the signing key is the admin on a devnet)"
+
+-- a user with a key of its own, registered through the facilitator: it needs no ETH
+task do_user(s, name)
+    let c be config(s)
+    let keys be p521_pair(s)
+    let key be decode(random_bytes(32), "hex")
+    let secret be v.secp_of(key, "VELA_USER_KEY")
+    let address be eth_address(secret)
+    let id be v.submit_for_with(c, secret, ASSOCIATE_KEY, v.register_payload_with(c, keys["key"], keys["pub"], secret), ETH, 0)
+    v.wait_completed(c, id, false)
+    set s["users"] to append(s["users"], {"name": name, "address": address, "key": key})
+    save(s)
+    give name + " (" + address + ") is registered; the facilitator paid"
+
+-- ---- the pages ----
+
+task overview(s, ok, err)
+    let c be config(s)
+    let d be {"ok": ok, "err": err, "host": v.need(c, "rpc", "VELA_RPC_URL"), "me": "", "eth": "", "tee": "", "app_id": s["app_id"], "deployed": s["app_id"] != "", "registered": s["registered"],
+              "events": [], "chain": [], "users": [], "report": "", "report_request": "", "note": ""}
+    try
+        set d["me"] to v.me()
+        set d["eth"] to v.from_units(text(eth_balance(c["rpc"], d["me"])), 18)
+        set d["tee"] to v.hex_of(v.tee_public_key(c))
+    recover e
+        set d["note"] to "the stack does not answer: " + text(e)
+    when d["deployed"]
+        when d["registered"]
+            set d["events"] to rows_of(c, p521_pair(s), v.secp_key(), 20)
+        try
+            each item in v.app_events(c, 10)
+                set d["chain"] to append(d["chain"], {"block": item["block"], "label": item["label"], "data": item["data"]})
+        recover e
+            set d["note"] to "could not read the public events: " + text(e)
+        let i be 0
+        each u in s["users"]
+            set d["users"] to append(d["users"], {"i": i, "name": u["name"], "address": u["address"]})
+            set i to i + 1
+        when file_exists(REPORT)
+            let r be json_decode(read_file(REPORT))
+            set d["report"] to json_encode(r["report"])
+            set d["report_request"] to r["request"]
+    give render("pages/home.html", d)
+
+task user_page(s, u, i, ok, err)
+    let c be config(s)
+    let d be {"ok": ok, "err": err, "name": u["name"], "address": u["address"], "i": i, "events": rows_of(c, p521_pair(s), user_key(u), 20)}
+    give render("pages/user.html", d)
+
+serve on 8080
+    timeout 300
+    route "GET /"
+        give overview(load(), text(field(query, "ok", "")), text(field(query, "err", "")))
+    route "POST /deploy"
+        let f be form of request
+        try
+            give back("/", do_deploy(load(), text(field(f, "params", "")), text(field(f, "trigger", ""))), "")
+        recover err
+            give back("/", "", "deploy failed: " + text(err))
+    route "POST /register"
+        try
+            give back("/", do_register(load()), "")
+        recover err
+            give back("/", "", "register failed: " + text(err))
+    route "POST /deposit"
+        let f be form of request
+        try
+            give back("/", do_deposit(load(), trim(text(field(f, "amount", ""))), text(field(f, "token", ""))), "")
+        recover err
+            give back("/", "", "the deposit failed: " + text(err))
+    route "POST /send"
+        let f be form of request
+        try
+            give back("/", do_send(load(), text(field(f, "payload", "")), text(field(f, "eth", ""))), "")
+        recover err
+            give back("/", "", "the request failed: " + text(err))
+    route "POST /report"
+        try
+            give back("/", do_report(load(), text(field(form of request, "payload", ""))), "")
+        recover err
+            give back("/", "", "the report failed: " + text(err))
+    route "POST /authority"
+        try
+            give back("/", do_allow_authority(load()), "")
+        recover err
+            give back("/", "", "could not allow the authority: " + text(err))
+    route "POST /users"
+        try
+            give back("/", do_user(load(), trim(text(field(form of request, "name", "a user")))), "")
+        recover err
+            give back("/", "", "the user could not be registered: " + text(err))
+    route "GET /users/:i"
+        let s be load()
+        let u be find_user(s, params.i)
+        when u == nothing
+            give fail(404, "no such user")
+        give user_page(s, u, params.i, text(field(query, "ok", "")), text(field(query, "err", "")))
+    route "POST /users/:i/send"
+        let s be load()
+        let u be find_user(s, params.i)
+        when u == nothing
+            give fail(404, "no such user")
+        try
+            give back("/users/" + params.i, do_send_as(s, u, text(field(form of request, "payload", ""))), "")
+        recover err
+            give back("/users/" + params.i, "", "the request failed: " + text(err))

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{ name } · a user</title>
+<style>
+{ raw }
+  :root{--ink:#1c1c1a;--dim:#6b6b66;--line:#e6e2d8;--paper:#fbfaf7;--ok:#1f7a4d;--no:#b23a3a;--accent:#2b4c7e}
+  body{margin:0;font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink);background:var(--paper)}
+  main{max-width:1000px;margin:0 auto;padding:28px 16px 60px}
+  h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;letter-spacing:.04em;text-transform:uppercase;color:var(--dim);margin:0 0 10px}
+  .box{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;word-break:break-all}.dim{color:var(--dim)}.small{font-size:13px}
+  .flash{padding:10px 12px;border-radius:8px;border:1px solid var(--line);margin:0 0 12px}.flash.ok{border-color:#bfe3cf;background:#eef8f2;color:var(--ok)}.flash.err{border-color:#e9c1c1;background:#fbeeee;color:var(--no)}
+  form{margin:0}label{display:block;font-size:13px;color:var(--dim);margin:8px 0 4px}
+  textarea{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line);border-radius:7px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;min-height:72px}
+  button{padding:9px 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;font:inherit;cursor:pointer;margin-top:8px}button:disabled{opacity:.6;cursor:wait}
+  table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--line);vertical-align:top}th{font-weight:600;color:var(--dim);font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+  a{color:var(--accent)}
+{ end }
+</style>
+</head>
+<body>
+<main>
+  <p class="small"><a href="/">← the workbench</a></p>
+  <h1>{ name }</h1>
+  <p class="dim small">A user the workbench made: <span class="mono">{ address }</span>. It signs its own requests; the facilitator submits and pays. What it receives is decrypted here with its key.</p>
+  { when ok != "" }<p class="flash ok">{ ok }</p>{ end }
+  { when err != "" }<p class="flash err">{ err }</p>{ end }
+  <section class="box">
+    <h2>Send a payload as { name }</h2>
+    <form method="post" action="/users/{ i }/send">
+      <textarea name="payload" placeholder='{ raw }{"type": "withdraw", "to": "0x…", "amount": "1000000000000000"}{ end }'></textarea>
+      <button type="submit" data-busy="Sending…">Send through the facilitator</button>
+    </form>
+  </section>
+  <section class="box">
+    <h2>{ name }'s events, decrypted</h2>
+    <table>
+      <tr><th>Block</th><th>Event</th></tr>
+      { each e in events }<tr><td class="mono">{ e.block }</td><td class="mono">{ e.json }</td></tr>{ otherwise }<tr><td colspan="2" class="dim">Nothing yet.</td></tr>{ end }
+    </table>
+  </section>
+</main>
+<script>
+{ raw }
+  document.querySelectorAll("form").forEach(function (f) { f.addEventListener("submit", function () { var b = f.querySelector("button[data-busy]"); if (b) { b.textContent = b.dataset.busy; setTimeout(function () { b.disabled = true; }, 0); } }); });
+{ end }
+</script>
+</body>
+</html>

@@ -91,24 +91,26 @@ task process(ctx)
 
 -- {"type": "transfer", "to": "0x…", "amount": "<wei>", "token"?: "0x…"}
 task transfer(ctx, state, payload)
-    let token be when contains(payload, "token") then payload["token"] otherwise ETH
+    -- addresses are keys of the ledger: lowercased, the way the Executor hands the sender
+    let token be when contains(payload, "token") then lower(payload["token"]) otherwise ETH
+    let recipient be lower(payload["to"])
     let amount be decimal(payload["amount"])
     let from_balance be balance_of(state, ctx["sender"], token)
     when from_balance < amount
         give {"error": "insufficient balance for transfer"}
     -- Debit first, then read the recipient from the debited state: a transfer to oneself must not create money.
     let s1 be set_balance(state, ctx["sender"], token, from_balance - amount)
-    let to_balance be balance_of(s1, payload["to"], token)
-    let s2 be set_balance(s1, payload["to"], token, to_balance + amount)
+    let to_balance be balance_of(s1, recipient, token)
+    let s2 be set_balance(s1, recipient, token, to_balance + amount)
     set s2["nonce"] to s2["nonce"] + 1
-    let sent be {"type": "transfer_sent", "to": payload["to"], "token": token, "amount": payload["amount"], "balance": text(from_balance - amount), "nonce": s2["nonce"]}
+    let sent be {"type": "transfer_sent", "to": recipient, "token": token, "amount": payload["amount"], "balance": text(from_balance - amount), "nonce": s2["nonce"]}
     let received be {"type": "transfer_received", "from": ctx["sender"], "token": token, "amount": payload["amount"], "balance": text(to_balance + amount), "nonce": s2["nonce"]}
     -- Both users must be registered (a P-521 key each), or the Executor fails the request.
-    give {"state": s2, "events": [{"user": ctx["sender"], "data": sent}, {"user": payload["to"], "data": received}], "fuel": "50"}
+    give {"state": s2, "events": [{"user": ctx["sender"], "data": sent}, {"user": recipient, "data": received}], "fuel": "50"}
 
 -- {"type": "withdraw", "to": "0x…", "amount": "<wei>", "token"?: "0x…"} → a pull-payment the recipient claims on-chain.
 task withdraw(ctx, state, payload)
-    let token be when contains(payload, "token") then payload["token"] otherwise ETH
+    let token be when contains(payload, "token") then lower(payload["token"]) otherwise ETH
     let amount be decimal(payload["amount"])
     let from_balance be balance_of(state, ctx["sender"], token)
     when from_balance < amount
