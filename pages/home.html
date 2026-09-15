@@ -41,7 +41,7 @@
 <body>
 <main>
   <h1>Vela workbench</h1>
-  <p class="lead">Your app (<span class="mono">app/app.syn</span>) from the browser: deploy it into the enclave, register, deposit, send any payload encrypted to the Executor, read what comes back decrypted, and what the chain sees. The template is a private ledger: <span class="mono">transfer</span> and <span class="mono">withdraw</span>. Every action is one request to the enclave, 30 to 60 s on a devnet.</p>
+  <p class="lead">Your app (<span class="mono">app/app.syn</span>) from the browser: deploy it into the enclave, register, deposit, send any payload encrypted to the Executor, read what comes back decrypted, and what the chain sees. The template is a private ledger: <span class="mono">transfer</span> (with an optional invoice and a public receipt) and <span class="mono">withdraw</span>, a log of the last movements, and two reports for an auditor. Every action is one request to the enclave, 30 to 60 s on a devnet.</p>
   { when ok != "" }<p class="flash ok">{ ok }</p>{ end }
   { when err != "" }<p class="flash err">{ err }</p>{ end }
   { when note != "" }<p class="flash err">{ note }</p>{ end }
@@ -84,11 +84,11 @@
       <h2>Send a payload</h2>
       <form method="post" action="/send">
         <label>JSON, encrypted for the Executor — the template's ledger understands these</label>
-        <textarea name="payload" placeholder='{ raw }{"type": "transfer", "to": "0x…", "amount": "1000000000000000"}{ end }'></textarea>
+        <textarea name="payload" placeholder='{ raw }{"type": "transfer", "to": "0x…", "amount": "1000000000000000", "invoice_id": "INV-2026-1"}{ end }'></textarea>
         <label>ETH sent with it (optional; the guest's deposit sees it)</label><input type="text" name="eth" placeholder="0">
         <button type="submit" class="btn" data-busy="Sending…">Send</button>
       </form>
-      <p class="small dim">Amounts are the token's smallest unit as text (wei for ETH). A <span class="mono">to</span> must be registered: make a user below.</p>
+      <p class="small dim">Amounts are the token's smallest unit as text (wei for ETH). A <span class="mono">to</span> must be registered: make a user below. <span class="mono">{ raw }{"type": "withdraw", "to": "0x…", "amount": "…"}{ end }</span> is a pull-payment. An <span class="mono">invoice_id</span> puts a keccak receipt among the public events.</p>
     </section>
     <section class="box">
       <h2>Users</h2>
@@ -101,7 +101,7 @@
     <section class="box">
       <h2>A report</h2>
       <form method="post" action="/report">
-        <label>Deanonymization request (JSON; empty means an empty object)</label><textarea name="payload"></textarea>
+        <label>Deanonymization request (JSON; empty = every balance)</label><textarea name="payload" placeholder='{ raw }{"report_type": "tx_history", "address": "0x…"}{ end }'></textarea>
         <button type="submit" class="btn" data-busy="Asking…">Ask the enclave</button>
       </form>
       <form method="post" action="/authority"><button type="submit" class="btn quiet" data-busy="Allowing…">Allow me as an authority first</button></form>
@@ -118,7 +118,7 @@
       <h2>What the chain sees</h2>
       <table>
         <tr><th class="num">Block</th><th>Subtype</th><th>Data</th></tr>
-        { each e in chain }<tr><td class="num">{ e.block }</td><td>{ e.label }</td><td class="mono">{ e.data }</td></tr>{ otherwise }<tr><td colspan="3" class="dim">No public events yet (the template emits none).</td></tr>{ end }
+        { each e in chain }<tr><td class="num">{ e.block }</td><td>{ e.label }</td><td class="mono">{ e.data }</td></tr>{ otherwise }<tr><td colspan="3" class="dim">No public events yet (a withdrawal leaves an ABI receipt; an invoiced transfer, a keccak receipt).</td></tr>{ end }
       </table>
     </section>
   </div>

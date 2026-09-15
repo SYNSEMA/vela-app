@@ -22,11 +22,13 @@ by `cd client && synsema run vela_client.syn -- devnet`. Then, in the browser:
    it to Vela (constructor params and a trigger contract are optional).
 2. **Register** your key with the enclave, **deposit** ETH or an allowlisted ERC-20.
 3. **Send any payload**, encrypted for the Executor — the template's ledger understands `transfer`
-   and `withdraw` — and read **your events, decrypted**, next to **what the chain sees**.
+   (with an optional `invoice_id`, which leaves a public receipt) and `withdraw` — and read **your
+   events, decrypted**, next to **what the chain sees**.
 4. **Users**: a key each, registered through the facilitator (they need no ETH), so a payload that
    names another account has someone to name; each user's page shows what they received and sends
    payloads as them.
-5. **Reports**: a deanonymization request, decrypted; one button allows you as an authority first.
+5. **Reports**: a deanonymization request, decrypted — every balance, or one account's movements
+   (`{"report_type": "tx_history", "address": "0x…"}`); one button allows you as an authority first.
 
 Every action is one request to the enclave: 30 to 60 seconds on a devnet. Edit `process` in
 `app/app.syn`, deploy again from the same page (a new application id), and drive it the same way.
@@ -36,9 +38,9 @@ Every action is one request to the enclave: 30 to 60 seconds on a devnet. Edit `
 ```
 web.syn                      the workbench: deploy · register · deposit · send · events · users · reports (the recipe's entry, kind = web)
 pages/                       its two pages
-app/app.syn                  your app: deploy · load_module · deposit · process · deanonymize · trusted, with tests
+app/app.syn                  your app: deploy · load_module · deposit · process · deanonymize · trusted, with tests — a private ledger with a token allowlist, invoiced transfers with a public receipt, pull-payment withdrawals, a log of the last 50 movements, two reports
 client/vela_lib.syn          Vela's client protocol as a module: keys, cipher, submit, events, facilitator, reports, token amounts
-client/vela_client.syn       the command line on the same module: keys, register, deploy, deposit ETH/ERC-20, encrypted send, reports, events, facilitator
+client/vela_client.syn       the command line on the same module: keys, register, deploy, deposit ETH/ERC-20, transfer, withdraw, balance, history, any encrypted send, reports, events, facilitator
 client/.env.example          addresses, URLs and keys the client reads
 scripts/embed_lib.syn        the app slot of a guest module (what build.sh and the workbench use to embed the program)
 scripts/build.sh             app/app.syn → build/app.wasm (the release's guest module with your program in its slot) + sha256
@@ -62,7 +64,7 @@ synsema test app/app.syn                 # 1. the app, natively — the same cod
 sh scripts/build.sh                      # 2. build/app.wasm: the release's guest + your program (the guest downloads once)
 node scripts/smoke.mjs build/app.wasm    #    Node 20 or 24+ (not 22): imports, exports, load_module, deploy, determinism
 sh scripts/devnet.sh                     # 3. Vela in Docker; writes client/.env with the deployed addresses
-sh scripts/e2e.sh                        # 4. keys, deploy, register, deposit, an encrypted request, your events decrypted
+sh scripts/e2e.sh                        # 4. keys, deploy, register, deposit, an invoiced transfer, a withdrawal, your events decrypted, the public receipts, a tx_history report
 ```
 
 Then edit `app/app.syn` — the instructions live in `process` — run step 1 again, rebuild, and
@@ -96,6 +98,20 @@ The rules that matter, all enforced by the adapter or by Vela itself:
 - **Bytes for contracts.** `data_hex`, `state_hex`, `report_hex` carry exact bytes (what a contract
   `abi.decode`s); `subtype` is `0x…` + 64 hex or a label of at most 32 bytes.
 
+### The template's ledger
+
+What `app/app.syn` does out of the box — the same ground as Horizen's reference app
+([`vela-nova`](https://github.com/HorizenOfficial/vela-nova)), in one file:
+
+| | |
+|---|---|
+| deploy | `{"allowedTokens": ["0x…"]}` as constructor params fixes the ERC-20s the app accepts; ETH is always allowed. A deposit, transfer or withdrawal in any other token is an error. |
+| `{"type": "transfer", "to", "amount", "token"?, "invoice_id"?}` | debits the sender, credits `to`, one encrypted event for each. With an `invoice_id` (≤ 100 characters) both events carry it and a public app event goes on-chain whose subtype is `keccak256(abi.encode(invoice, from, token, amount, to))`: whoever holds the invoice can verify the payment, nobody else learns anything. |
+| `{"type": "withdraw", "to", "amount", "token"?}` | a pull-payment `to` claims on the ProcessorEndpoint, plus a public ABI receipt `(to, token, amount)` under the label `withdrawal`. |
+| the log | the last 50 movements (deposit, transfer, withdrawal, a trigger's credit), each with the nonce of its event. There is no clock in the enclave, so no timestamps: the nonce orders them. |
+| report `{}` | every balance, for an allowed authority. |
+| report `{"report_type": "tx_history", "address", "from_nonce"?, "to_nonce"?}` | one account's balances and movements, narrowed by nonce (the reference app narrows by timestamp; here that would need a clock the enclave does not have). |
+
 ## The client
 
 `client/vela_lib.syn` is Vela's client protocol as a module (`use "./client/vela_lib.syn" as v`: the workbench, the CLI and the other kits build on it); `client/vela_client.syn` is the command line on top of it:
@@ -107,6 +123,9 @@ The rules that matter, all enforced by the adapter or by Vela itself:
 | `register` | AssociateKey: your P-521 public key and a privacy seed, encrypted for the Executor |
 | `deposit <amount> [token]` | ETH (wei) or an allowlisted ERC-20 (approves first) |
 | `send '<json>' [wei]` | a PROCESS request, payload encrypted for the Executor; optional ETH deposit with it |
+| `transfer <to> <amount> [token\|-] [invoice]` · `withdraw <to> <amount> [token]` | the template's instructions with the payload built for you; `transfer` prints the receipt's subtype when there is an invoice, `withdraw` the amount now pending for `to` |
+| `balance [token]` · `public-balance [token]` · `pending [token] [address]` · `claim [token] [address]` | your private balance (from your newest event) · what you hold on-chain · what a withdrawal (and the fee refunds) left to claim · collect it, for you or for someone else (a plain transaction to the ProcessorEndpoint) |
+| `history <address> [from-nonce] [to-nonce]` | one account's `tx_history` report, decrypted (you must be an allowed authority) |
 | `report '<json>'` · `report-download <id>` | a deanonymization report (the caller must be an allowed authority), fetched and decrypted |
 | `events [n]` · `app-events [n]` · `status <id>` | your events decrypted · the app's public events · a request's status |
 | `user` · `register-for` · `send-for '<json>' [amount token]` · `events-for [n]` | the facilitator flow: a user with no ETH signs EIP-712 typed data (and an EIP-2612 permit for a token deposit); `VELA_SECP_KEY` pays |
@@ -139,7 +158,10 @@ desde el devnet público) hace todo desde el navegador: desplegar `app/app.syn`,
 mandar cualquier payload cifrado, leer tus eventos descifrados y los públicos, usuarios por el
 facilitador, reportes. Desde la terminal: 1. `synsema test app/app.syn` — la app, nativa. 2. `sh scripts/build.sh` —
 el módulo. 3. `sh scripts/devnet.sh` — Vela en Docker. 4. `sh scripts/e2e.sh` — claves, deploy, registro,
-depósito, un request cifrado y tus eventos descifrados. Después editá `process` en `app/app.syn` y repetí. La referencia completa en español está en
+depósito, una transferencia con factura, un retiro, tus eventos descifrados, los recibos públicos y el
+reporte `tx_history`. La plantilla ya cubre lo mismo que la app de referencia de Horizen (`vela-nova`):
+allowlist de tokens al desplegar, transferencias con factura y recibo público, retiros, el log de los
+últimos 50 movimientos y dos reportes. Después editá `process` en `app/app.syn` y repetí. La referencia completa en español está en
 [synsema.dev/es/0.6.x/73-vela](https://synsema.dev/es/0.6.x/73-vela).
 
 ## License

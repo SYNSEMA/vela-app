@@ -16,6 +16,14 @@
 --   synsema run vela_client.syn -- register                      AssociateKey: your key + encrypted seed
 --   synsema run vela_client.syn -- deposit <amount> [token]      ETH (wei) or an allowlisted ERC-20 (units) into the app (the guest's `deposit`)
 --   synsema run vela_client.syn -- send '<json>' [wei]           PROCESS (payload encrypted; optional deposit with it)
+--   the template's ledger, spelled out (each one is a `send` / `report` with the payload built for you):
+--   synsema run vela_client.syn -- transfer <to> <amount> [token|-] [invoice]   a private transfer; with an invoice, a public keccak receipt
+--   synsema run vela_client.syn -- withdraw <to> <amount> [token]              a pull-payment `to` claims on-chain
+--   synsema run vela_client.syn -- balance [token]                             your private balance, from your newest event
+--   synsema run vela_client.syn -- public-balance [token]                      what you hold on-chain (ETH or an ERC-20)
+--   synsema run vela_client.syn -- pending [token] [address]                   what a withdrawal left for you (or `address`) to claim on the ProcessorEndpoint
+--   synsema run vela_client.syn -- claim [token] [address]                     collect it, for you or for `address` (claim(token, payee) on the ProcessorEndpoint: a plain transaction, anyone may send it)
+--   synsema run vela_client.syn -- history <address> [from-nonce] [to-nonce]   tx_history report of one account (you must be an allowed authority)
 --   synsema run vela_client.syn -- report '<json>'               DEANONYMIZATION (the caller must be an allowed authority); prints the decrypted report
 --   synsema run vela_client.syn -- report-download <reportId>    fetch + decrypt an earlier report from the authority service
 --   synsema run vela_client.syn -- events [n]                    your last n events, decrypted
@@ -56,13 +64,44 @@ let DEANONYMIZATION be 2
 let ASSOCIATE_KEY be 3
 
 task usage()
-    print("usage: synsema run vela_client.syn -- devnet [host] | allow-token <address> | allow-authority <appId> <address> | keys | address | tee | deploy <wasm> [params-json|-] [trigger] | register | deposit <amount> [token] | send '<json>' [wei] | report '<json>' | report-download <reportId> | events [n] | app-events [n] | status <requestId> | user | user-keys | register-for | send-for '<json>' [amount token] | events-for [n]")
+    print("usage: synsema run vela_client.syn -- devnet [host] | allow-token <address> | allow-authority <appId> <address> | keys | address | tee | deploy <wasm> [params-json|-] [trigger] | register | deposit <amount> [token] | send '<json>' [wei] | transfer <to> <amount> [token|-] [invoice] | withdraw <to> <amount> [token] | balance [token] | public-balance [token] | pending [token] [address] | claim [token] [address] | history <address> [from-nonce] [to-nonce] | report '<json>' | report-download <reportId> | events [n] | app-events [n] | status <requestId> | user | user-keys | register-for | send-for '<json>' [amount token] | events-for [n]")
 
 task arg_or(a, i, default)
     give when length(a) > i then a[i] otherwise default
 
 task encrypted(c, plain)
     give v.seal(v.derive_key(v.p521_key(), v.tee_public_key(c)), bytes(json_encode(plain)))
+
+-- The ledger's public receipt of an invoiced transfer, recomputed here so you know which app event
+-- to look for: keccak256(abi.encode(invoice, from, token, amount, to)) — the same line as app/app.syn.
+task receipt_of(invoice, origin, token, amount, dest)
+    let call be abi_encode("receipt(string,address,address,uint256,address)", [invoice, origin, token, amount, dest])
+    give v.hex_of(keccak256(slice(call, 4, length(call))))
+
+-- `transfer` and `withdraw` take the token as the third argument; "-" or nothing means ETH.
+task token_arg(a, i)
+    let t be lower(arg_or(a, i, ETH))
+    give when t == "-" then ETH otherwise t
+
+-- The newest of your decrypted events for a token carries the balance the enclave computed.
+task balance_in(ev, token)
+    try
+        when contains(ev, "balance") and lower(text(ev["token"])) == token
+            give ev
+    recover e
+        give nothing
+    give nothing
+
+-- What a withdrawal left on the ProcessorEndpoint for `who` to claim, in `token`.
+task pending_of(c, token, who)
+    give v.call_uint(c, v.need(c, "processor", "VELA_PROCESSOR"), "pendingClaims(address,address)", [token, who])
+
+task run_process(c, plain)
+    let id be v.submit(c, PROCESS, encrypted(c, plain), ETH, 0)
+    print("request submitted: " + id)
+    let row be v.wait_completed(c, id, false)
+    print("completed at block " + text(row["blockNumber"]) + ", fees " + text(row["applicationFees"]) + " wei")
+    give id
 
 task run_cli(a)
     when length(a) == 0
@@ -125,6 +164,58 @@ task run_cli(a)
             print("request submitted: " + id)
             let row be v.wait_completed(c, id, false)
             print("completed at block " + text(row["blockNumber"]) + ", fees " + text(row["applicationFees"]) + " wei")
+        is "transfer"
+            let plain be {"type": "transfer", "to": lower(a[1]), "amount": a[2]}
+            let token be token_arg(a, 3)
+            when token != ETH
+                set plain["token"] to token
+            when length(a) > 4
+                set plain["invoice_id"] to a[4]
+            run_process(c, plain)
+            when length(a) > 4
+                print("public receipt (an app event with this subtype): " + receipt_of(a[4], v.me(), token, v.int_of(a[2]), lower(a[1])))
+        is "withdraw"
+            let plain be {"type": "withdraw", "to": lower(a[1]), "amount": a[2]}
+            let token be token_arg(a, 3)
+            when token != ETH
+                set plain["token"] to token
+            run_process(c, plain)
+            print("pending for " + lower(a[1]) + " on the ProcessorEndpoint: " + text(pending_of(c, token, lower(a[1]))) + " (`claim` collects it)")
+        is "public-balance"
+            let token be token_arg(a, 1)
+            print(text(v.token_balance_of(c, token, v.me())) + " (" + token + ", on-chain)")
+        is "pending"
+            let token be token_arg(a, 1)
+            let who be lower(arg_or(a, 2, v.me()))
+            print(text(pending_of(c, token, who)) + " (" + token + ") pending for " + who)
+        is "claim"
+            let token be token_arg(a, 1)
+            let who be lower(arg_or(a, 2, v.me()))
+            let receipt be v.send_tx(c, v.need(c, "processor", "VELA_PROCESSOR"), 0, abi_encode("claim(address,address)", [token, who]))
+            print("claimed for " + who + " (tx " + text(receipt["transactionHash"]) + "); pending now " + text(pending_of(c, token, who)) + ", on-chain " + text(v.token_balance_of(c, token, who)))
+        is "balance"
+            let token be token_arg(a, 1)
+            let found be nothing
+            each item in v.my_events(c, 50)
+                when found == nothing and contains(item, "event")
+                    set found to balance_in(item["event"], token)
+            when found == nothing
+                print("no event for " + token + " among your last 50: deposit or receive first")
+            otherwise
+                print(text(found["balance"]) + " (" + token + ", after nonce " + text(found["nonce"]) + ")")
+        is "history"
+            let plain be {"report_type": "tx_history", "address": lower(a[1])}
+            when length(a) > 2
+                set plain["from_nonce"] to floor(number(a[2]))
+            when length(a) > 3
+                set plain["to_nonce"] to floor(number(a[3]))
+            let id be v.submit(c, DEANONYMIZATION, encrypted(c, plain), ETH, 0)
+            print("report request submitted: " + id)
+            v.wait_completed(c, id, false)
+            let r be v.download_report(c, id)["report"]
+            each tx in r["transactions"]
+                print(json_encode(tx))
+            print("balances of " + r["address"] + ": " + json_encode(r["balances"]))
         is "report"
             let plain be json_decode(arg_or(a, 1, "{}"))
             let id be v.submit(c, DEANONYMIZATION, encrypted(c, plain), ETH, 0)
@@ -233,6 +324,21 @@ test "the facilitator's typed data digests are 32 bytes and change with every fi
     assert(sig[64] == 27 or sig[64] == 28)
     assert_eq(length(v.permit_bytes(sig)), 96)
     assert_eq(v.permit_bytes(sig)[31], sig[64])
+
+test "the invoice receipt is the ledger's keccak of abi.encode(invoice, from, token, amount, to); the token argument defaults to ETH"
+    let alice be "0x1111111111111111111111111111111111111111"
+    let bob be "0x2222222222222222222222222222222222222222"
+    let r be receipt_of("INV-2026-1", alice, ETH, 120, bob)
+    assert_eq(length(r), 66)
+    assert_eq(r, receipt_of("INV-2026-1", alice, ETH, 120, bob))
+    assert(r != receipt_of("INV-2026-1", alice, ETH, 121, bob))
+    assert_eq(r, v.hex_of(keccak256(slice(abi_encode("x(string,address,address,uint256,address)", ["INV-2026-1", alice, ETH, 120, bob]), 4, 4 + 224))))
+    assert_eq(token_arg(["transfer", bob, "5"], 3), ETH)
+    assert_eq(token_arg(["transfer", bob, "5", "-"], 3), ETH)
+    assert_eq(token_arg(["transfer", bob, "5", "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"], 3), "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
+    assert_eq(balance_in({"type": "deposit", "token": ETH, "balance": "7", "nonce": 1}, ETH)["balance"], "7")
+    assert_eq(balance_in({"type": "deposit", "token": ETH, "balance": "7", "nonce": 1}, "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"), nothing)
+    assert_eq(balance_in("not json", ETH), nothing)
 
 test "submitRequest calldata carries the selector"
     let data be abi_encode("submitRequest(uint8,uint64,uint8,bytes,address,uint256,uint256)", [0, 1, PROCESS, bytes("x"), ETH, 5, 100])

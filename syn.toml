@@ -7,7 +7,7 @@
 
 name = "Vela app"
 slug = "vela-app"
-version = "0.2.3"
+version = "0.3.0"
 kind = "web"
 entry = "web.syn"
 engine = "0.6"

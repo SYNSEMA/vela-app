@@ -255,7 +255,9 @@ task overview(s, ok, err)
             set d["events"] to rows_of(c, p521_pair(s), v.secp_key(), 20)
         try
             each item in v.app_events(c, 10)
-                set d["chain"] to append(d["chain"], {"block": item["block"], "label": item["label"], "data": item["data"]})
+                -- a label reads as itself; a hash (an invoice receipt) shows shortened
+                let label be when item["label"] == nothing then short(item["subtype"]) otherwise item["label"]
+                set d["chain"] to append(d["chain"], {"block": item["block"], "label": label, "data": item["data"]})
         recover e
             set d["note"] to "could not read the public events: " + text(e)
         let i be 0
